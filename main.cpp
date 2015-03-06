@@ -219,10 +219,7 @@ int main()
         gen_stripe(fnv_hash(i), first_stripe, curr_stripe, config);
         // hash_gen_stripe(linux_hash(i, 64), first_stripe, curr_stripe,
         // config);
-        add(sum, curr_stripe,
-            (config.disks -
-             (i % config.disks) * (config.disks - config.stripe_length())) %
-                config.disks,
+        add(sum, curr_stripe, (i * config.stripe_length()) % config.disks,
             config);
     }
 
