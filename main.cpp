@@ -9,8 +9,7 @@ using namespace std;
 const int E = -2;
 const int G = -1;
 
-struct stripe_config
-{
+struct stripe_config {
     long long int disks;
     long long int local_groups;
     long long int local_group_size;
@@ -112,17 +111,62 @@ void hash_gen_stripe(uint64_t seed, const stripe_t &first_stripe,
     }
 }
 
+string stripe_elem(int code, const stripe_config &config)
+{
+    if (code == E) {
+        return " E";
+    } else if (code == G) {
+        return " G";
+    } else if (code == 0) {
+        return "00";
+    } else if (code <= config.local_groups) {
+        string s = " ";
+        s.push_back('0' + code);
+        return s;
+    } else {
+        string s = "S";
+        s.push_back('0' + (code - config.local_groups));
+        return s;
+    }
+}
+
+bool same_local_group(int b1, int b2, const stripe_config &config)
+{
+    return b1 > 0 && b2 > 0 && (b1 == b2 || b1 == b2 + config.local_groups ||
+                                b2 == b1 + config.local_groups);
+}
+
 void add(vector<uint64_t> &sum, const stripe_t &stripe, int stripe_offset,
-         const stripe_config &config)
+         const stripe_config &config, bool debug_print = false)
 {
     assert(stripe_offset < config.disks);
     int failed_index = (config.disks - stripe_offset) % config.disks;
+    if (failed_index >= config.stripe_length()) {
+        return;
+    }
     int failed = stripe[failed_index];
     for (int i = 0; i < config.stripe_length(); i++) {
         int source = stripe[i];
         sum[(stripe_offset + i) % config.disks] +=
-            (i != failed_index) &&
-            ((failed > 0 && source == failed) || (failed == G && source > 0));
+            (i != failed_index) && (same_local_group(source, failed, config) ||
+                                    (failed == G && source > 0));
+    }
+
+    if (debug_print) {
+        for (long long int i = 0; i < stripe_offset; i++) {
+            cout << "   ";
+        }
+        for (size_t i = 0; i < stripe.size(); i++) {
+            if ((i + stripe_offset) % config.disks == 0) {
+                cout << endl;
+            }
+            cout << stripe_elem(stripe[i], config) << " ";
+        }
+        cout << endl;
+        for (size_t i = 0; i < sum.size(); i++) {
+            cout << sum[i] << " ";
+        }
+        cout << endl;
     }
 }
 
@@ -147,9 +191,9 @@ void print_sum(const vector<uint64_t> &sum)
 int main()
 {
     stripe_config config;
-    config.disks = 255;
-    config.local_groups = 15;
-    config.local_group_size = 16;
+    config.disks = 24;
+    config.local_groups = 3;
+    config.local_group_size = 7;
     config.global_parities = 1;
 
     uint64_t kb = 1024;
@@ -161,6 +205,7 @@ int main()
     uint64_t stripe_size = stripe_width * config.stripe_length();
 
     uint64_t disk_size = 73 * gb;
+    // uint64_t disk_size = 23 * stripe_width;
     uint64_t array_size = disk_size * config.disks;
 
     uint64_t stripes = array_size / stripe_size;
@@ -172,8 +217,13 @@ int main()
     cout << "Calculating for " << stripes << " stripes" << endl;
     for (uint64_t i = 0; i < stripes; i++) {
         gen_stripe(fnv_hash(i), first_stripe, curr_stripe, config);
-        //hash_gen_stripe(linux_hash(i, 64), first_stripe, curr_stripe, config);
-        add(sum, curr_stripe, i % config.disks, config);
+        // hash_gen_stripe(linux_hash(i, 64), first_stripe, curr_stripe,
+        // config);
+        add(sum, curr_stripe,
+            (config.disks -
+             (i % config.disks) * (config.disks - config.stripe_length())) %
+                config.disks,
+            config);
     }
 
     print_sum(sum);
