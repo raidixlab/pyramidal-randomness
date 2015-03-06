@@ -11,12 +11,12 @@ const int G = -1;
 
 struct stripe_config
 {
-    int disks;
-    int local_groups;
-    int local_group_size;
-    int global_parities;
+    long long int disks;
+    long long int local_groups;
+    long long int local_group_size;
+    long long int global_parities;
 
-    int size() const
+    long long int stripe_length() const
     {
         return local_groups * local_group_size + global_parities + 1;
     }
@@ -27,7 +27,7 @@ typedef vector<int> stripe_t;
 stripe_t gen_first_stripe(const stripe_config &config)
 {
     stripe_t result;
-    result.reserve(config.size());
+    result.reserve(config.stripe_length());
     for (int local_group = 1; local_group <= config.local_groups;
          local_group++) {
         for (int local_strip = 0; local_strip < config.local_group_size - 1;
@@ -49,7 +49,7 @@ void gen_stripe(uint64_t seed, const stripe_t &first_stripe, stripe_t &result,
 {
     result = first_stripe;
     mt19937_64 generator(seed);
-    for (size_t i = config.size() - 1; i >= 1; i--) {
+    for (size_t i = config.stripe_length() - 1; i >= 1; i--) {
         size_t j = uniform_int_distribution<size_t>(0, i)(generator);
         swap(result[j], result[i]);
     }
@@ -59,8 +59,8 @@ void shift_stripe(uint64_t offset, const stripe_t &first_stripe,
                   stripe_t &result, const stripe_config &config)
 {
     offset += (offset / config.disks);
-    for (size_t i = 0; i < config.size(); i++) {
-        result[(i + offset) % config.size()] = first_stripe[i];
+    for (long long int i = 0; i < config.stripe_length(); i++) {
+        result[(i + offset) % config.stripe_length()] = first_stripe[i];
     }
 }
 
@@ -78,13 +78,47 @@ uint64_t fnv_hash(uint64_t number)
     return result;
 }
 
+uint64_t linux_hash(uint64_t val, unsigned int bits)
+{
+    uint64_t hash = val;
+
+    /*  Sigh, gcc can't optimise this alone like it does for 32 bits. */
+    uint64_t n = hash;
+    n <<= 18;
+    hash -= n;
+    n <<= 33;
+    hash -= n;
+    n <<= 3;
+    hash += n;
+    n <<= 3;
+    hash -= n;
+    n <<= 4;
+    hash += n;
+    n <<= 2;
+    hash += n;
+
+    /* High bits are more random, so use them. */
+    return hash >> (64 - bits);
+}
+
+void hash_gen_stripe(uint64_t seed, const stripe_t &first_stripe,
+                     stripe_t &result, const stripe_config &config)
+{
+    result = first_stripe;
+    for (size_t i = config.stripe_length() - 1; i >= 1; i--) {
+        seed = linux_hash(seed, 64);
+        size_t j = seed % (i + 1);
+        swap(result[j], result[i]);
+    }
+}
+
 void add(vector<uint64_t> &sum, const stripe_t &stripe, int stripe_offset,
          const stripe_config &config)
 {
     assert(stripe_offset < config.disks);
     int failed_index = (config.disks - stripe_offset) % config.disks;
     int failed = stripe[failed_index];
-    for (int i = 0; i < config.size(); i++) {
+    for (int i = 0; i < config.stripe_length(); i++) {
         int source = stripe[i];
         sum[(stripe_offset + i) % config.disks] +=
             (i != failed_index) &&
@@ -113,9 +147,9 @@ void print_sum(const vector<uint64_t> &sum)
 int main()
 {
     stripe_config config;
-    config.disks = 24;
-    config.local_groups = 3;
-    config.local_group_size = 7;
+    config.disks = 255;
+    config.local_groups = 15;
+    config.local_group_size = 16;
     config.global_parities = 1;
 
     uint64_t kb = 1024;
@@ -124,16 +158,21 @@ int main()
     uint64_t tb = 1024 * gb;
 
     uint64_t stripe_width = 128 * kb;
-    uint64_t disk_size = 73 * gb;
+    uint64_t stripe_size = stripe_width * config.stripe_length();
 
-    uint64_t stripes = disk_size / stripe_width;
+    uint64_t disk_size = 73 * gb;
+    uint64_t array_size = disk_size * config.disks;
+
+    uint64_t stripes = array_size / stripe_size;
 
     stripe_t first_stripe = gen_first_stripe(config);
     stripe_t curr_stripe;
     vector<uint64_t> sum(config.disks, 0);
 
+    cout << "Calculating for " << stripes << " stripes" << endl;
     for (uint64_t i = 0; i < stripes; i++) {
         gen_stripe(fnv_hash(i), first_stripe, curr_stripe, config);
+        //hash_gen_stripe(linux_hash(i, 64), first_stripe, curr_stripe, config);
         add(sum, curr_stripe, i % config.disks, config);
     }
 
