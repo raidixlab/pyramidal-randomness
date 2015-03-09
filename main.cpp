@@ -54,15 +54,6 @@ void gen_stripe(uint64_t seed, const stripe_t &first_stripe, stripe_t &result,
     }
 }
 
-void shift_stripe(uint64_t offset, const stripe_t &first_stripe,
-                  stripe_t &result, const stripe_config &config)
-{
-    offset += (offset / config.disks);
-    for (long long int i = 0; i < config.stripe_length(); i++) {
-        result[(i + offset) % config.stripe_length()] = first_stripe[i];
-    }
-}
-
 uint64_t fnv_hash(uint64_t number)
 {
     uint64_t fnv_offset_basis = 0xcbf29ce484222325ULL;
@@ -77,7 +68,7 @@ uint64_t fnv_hash(uint64_t number)
     return result;
 }
 
-uint64_t linux_hash(uint64_t val, unsigned int bits)
+uint64_t linux_hash(uint64_t val)
 {
     uint64_t hash = val;
 
@@ -96,8 +87,7 @@ uint64_t linux_hash(uint64_t val, unsigned int bits)
     n <<= 2;
     hash += n;
 
-    /* High bits are more random, so use them. */
-    return hash >> (64 - bits);
+    return hash;
 }
 
 void hash_gen_stripe(uint64_t seed, const stripe_t &first_stripe,
@@ -105,7 +95,7 @@ void hash_gen_stripe(uint64_t seed, const stripe_t &first_stripe,
 {
     result = first_stripe;
     for (size_t i = config.stripe_length() - 1; i >= 1; i--) {
-        seed = linux_hash(seed, 64);
+        seed = linux_hash(seed);
         size_t j = seed % (i + 1);
         swap(result[j], result[i]);
     }
@@ -217,8 +207,6 @@ int main()
     cout << "Calculating for " << stripes << " stripes" << endl;
     for (uint64_t i = 0; i < stripes; i++) {
         gen_stripe(fnv_hash(i), first_stripe, curr_stripe, config);
-        // hash_gen_stripe(linux_hash(i, 64), first_stripe, curr_stripe,
-        // config);
         add(sum, curr_stripe, (i * config.stripe_length()) % config.disks,
             config);
     }
