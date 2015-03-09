@@ -23,6 +23,64 @@ struct stripe_config {
 
 typedef vector<int> stripe_t;
 
+class xorshift
+{
+  public:
+    xorshift(uint64_t seed);
+    uint64_t operator()();
+
+  private:
+    uint32_t gen32();
+    uint32_t x, y, z, w;
+};
+
+xorshift::xorshift(uint64_t seed)
+    : x(seed >> 32), y(seed), z(seed >> 32), w(seed)
+{
+}
+
+uint64_t xorshift::operator()()
+{
+    uint64_t result = gen32();
+    result <<= 32;
+    result |= gen32();
+    return result;
+}
+
+uint32_t xorshift::gen32()
+{
+    uint32_t t = x ^ (x << 11);
+    x = y;
+    y = z;
+    z = w;
+    w = w ^ (w >> 19) ^ (t ^ (t >> 8));
+    return w;
+}
+
+class xorshift_plus
+{
+  public:
+    xorshift_plus(uint64_t seed);
+    uint64_t operator()();
+
+  private:
+    uint64_t s0, s1;
+};
+
+xorshift_plus::xorshift_plus(uint64_t seed) : s0(seed), s1(seed) {}
+
+uint64_t xorshift_plus::operator()()
+{
+    uint64_t x = s0;
+    uint64_t const y = s1;
+    s0 = y;
+    x ^= x << 23;
+    x ^= x >> 17;
+    x ^= y ^ (y >> 26);
+    s1 = x;
+    return x + y;
+}
+
 stripe_t gen_first_stripe(const stripe_config &config)
 {
     stripe_t result;
@@ -43,13 +101,31 @@ stripe_t gen_first_stripe(const stripe_config &config)
     return result;
 }
 
+template <uint64_t gen_func()>
+uint64_t uniform_distribution(uint64_t rangeLow, uint64_t rangeHigh)
+{
+    uint64_t range = rangeHigh - rangeLow + 1;
+    uint64_t copies = RAND_MAX / range;
+    uint64_t limit = range * copies;
+    uint64_t myRand = limit;
+    while (myRand >= limit) {
+        myRand = gen_func();
+    }
+    return myRand / copies + rangeLow;
+}
+
+template <typename generator_t>
 void gen_stripe(uint64_t seed, const stripe_t &first_stripe, stripe_t &result,
                 const stripe_config &config)
 {
     result = first_stripe;
-    mt19937_64 generator(seed);
+    generator_t generator(seed);
     for (size_t i = config.stripe_length() - 1; i >= 1; i--) {
-        size_t j = uniform_int_distribution<size_t>(0, i)(generator);
+
+        size_t j = generator() % (i + 1);
+
+        // size_t j = uniform_distribution<bind(generator::operator(), _1)>(0,
+        // i);
         swap(result[j], result[i]);
     }
 }
@@ -88,17 +164,6 @@ uint64_t linux_hash(uint64_t val)
     hash += n;
 
     return hash;
-}
-
-void hash_gen_stripe(uint64_t seed, const stripe_t &first_stripe,
-                     stripe_t &result, const stripe_config &config)
-{
-    result = first_stripe;
-    for (size_t i = config.stripe_length() - 1; i >= 1; i--) {
-        seed = linux_hash(seed);
-        size_t j = seed % (i + 1);
-        swap(result[j], result[i]);
-    }
 }
 
 string stripe_elem(int code, const stripe_config &config)
@@ -178,6 +243,25 @@ void print_sum(const vector<uint64_t> &sum)
          << endl;
 }
 
+template <uint64_t hash(uint64_t), typename generator_t>
+void test(uint64_t stripes, stripe_config config, string description)
+{
+    cout << description << endl;
+
+    stripe_t first_stripe = gen_first_stripe(config);
+    stripe_t curr_stripe;
+    vector<uint64_t> sum(config.disks, 0);
+
+    for (uint64_t i = 0; i < stripes; i++) {
+        gen_stripe<generator_t>(hash(i), first_stripe, curr_stripe, config);
+        add(sum, curr_stripe, (i * config.stripe_length()) % config.disks,
+            config);
+    }
+
+    print_sum(sum);
+    cout << endl;
+}
+
 int main()
 {
     stripe_config config;
@@ -186,31 +270,30 @@ int main()
     config.local_group_size = 7;
     config.global_parities = 1;
 
-    uint64_t kb = 1024;
-    uint64_t mb = 1024 * kb;
-    uint64_t gb = 1024 * mb;
-    uint64_t tb = 1024 * gb;
+    const uint64_t kb = 1024;
+    const uint64_t mb = 1024 * kb;
+    const uint64_t gb = 1024 * mb;
+    const uint64_t tb = 1024 * gb;
 
-    uint64_t stripe_width = 128 * kb;
-    uint64_t stripe_size = stripe_width * config.stripe_length();
+    const uint64_t stripe_width = 128 * kb;
+    const uint64_t stripe_size = stripe_width * config.stripe_length();
 
-    uint64_t disk_size = 73 * gb;
-    // uint64_t disk_size = 23 * stripe_width;
-    uint64_t array_size = disk_size * config.disks;
+    const uint64_t disk_size = 73 * gb;
+    const uint64_t array_size = disk_size * config.disks;
 
-    uint64_t stripes = array_size / stripe_size;
+    const uint64_t stripes = array_size / stripe_size;
+    cout << "Calculating for " << stripes << " stripes" << endl << endl;
 
-    stripe_t first_stripe = gen_first_stripe(config);
-    stripe_t curr_stripe;
-    vector<uint64_t> sum(config.disks, 0);
+#define TEST_HELPER(description, hash, gen_t)                                  \
+    test<hash, gen_t>(stripes, config, description)
+#define TEST(hash, gen_t) TEST_HELPER(#hash ", " #gen_t, hash, gen_t)
 
-    cout << "Calculating for " << stripes << " stripes" << endl;
-    for (uint64_t i = 0; i < stripes; i++) {
-        gen_stripe(fnv_hash(i), first_stripe, curr_stripe, config);
-        add(sum, curr_stripe, (i * config.stripe_length()) % config.disks,
-            config);
-    }
+    TEST(fnv_hash, mt19937_64);
+    TEST(linux_hash, mt19937_64);
+    TEST(fnv_hash, xorshift);
+    TEST(linux_hash, xorshift);
+    TEST(fnv_hash, xorshift_plus);
+    TEST(linux_hash, xorshift_plus);
 
-    print_sum(sum);
     return 0;
 }
