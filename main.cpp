@@ -1,15 +1,18 @@
 #include <cassert>
+#include <chrono>
 #include <iostream>
 #include <random>
 #include <string>
 #include <vector>
 
 using namespace std;
+using namespace std::chrono;
 
 const int E = -2;
 const int G = -1;
 
-struct stripe_config {
+struct stripe_config
+{
     long long int disks;
     long long int local_groups;
     long long int local_group_size;
@@ -166,6 +169,8 @@ uint64_t linux_hash(uint64_t val)
     return hash;
 }
 
+uint64_t plus_one(uint64_t val) { return val + 1; }
+
 string stripe_elem(int code, const stripe_config &config)
 {
     if (code == E) {
@@ -252,13 +257,20 @@ void test(uint64_t stripes, stripe_config config, string description)
     stripe_t curr_stripe;
     vector<uint64_t> sum(config.disks, 0);
 
+    auto start_time = steady_clock::now();
+
     for (uint64_t i = 0; i < stripes; i++) {
         gen_stripe<generator_t>(hash(i), first_stripe, curr_stripe, config);
         add(sum, curr_stripe, (i * config.stripe_length()) % config.disks,
             config);
     }
 
+    auto end_time = steady_clock::now();
+    duration<double> elapsed_time =
+        duration_cast<duration<double>>(end_time - start_time);
+
     print_sum(sum);
+    cout << "Elapsed time: " << elapsed_time.count() << "s" << endl;
     cout << endl;
 }
 
@@ -290,10 +302,13 @@ int main()
 
     TEST(fnv_hash, mt19937_64);
     TEST(linux_hash, mt19937_64);
+    TEST(plus_one, mt19937_64);
     TEST(fnv_hash, xorshift);
     TEST(linux_hash, xorshift);
+    TEST(plus_one, xorshift);
     TEST(fnv_hash, xorshift_plus);
     TEST(linux_hash, xorshift_plus);
+    TEST(plus_one, xorshift_plus);
 
     return 0;
 }
